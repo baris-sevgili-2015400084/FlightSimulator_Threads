@@ -1,191 +1,121 @@
-#include <iostream>
-#include <algorithm>
-#include <string.h>
-#include <queue>
-#include <functional>
-#include <cstdio>
-#include <fstream>
+
+#include <pthread.h>
+#include <stdio.h>
+#include <unistd.h>
+#include <stdbool.h>
+#include <stdlib.h>
 
 
-#include "Process.h"
+void *Client(void *param); 		//client thread
+void *Server(void *param); 		//server thread
 
+int *isAvailable;		//an array, isAvailable[i]=1 denotes (i+1)th seat is not picked from a client yet, is available to be picked
+int total_seats;		//denotes the total number of seats
 
-using namespace std;
+pthread_mutex_t m = PTHREAD_MUTEX_INITIALIZER;		//initializing the mutex
 
+FILE *_file;			//the output file
 
-//vector<vector<int>> codeVec;   // a vector, which includes vectors that are including code files
+struct pars{			//struct to keep seat number and client id in it
 
-struct ComparePriorities   // a struct that compares priorities, if equal, arrival times of the functions
-{
-    bool operator()(const Process &a, const Process &b) {
+	int seat_num;		//seat number
+	int cli_id;		//client id
 
-        if (a.priority !=b.priority)
-            return a.priority > b.priority;     //lower value means higher priority
-        else  return a.arTime > b.arTime;       //FIFO manner
-    }
 };
 
-/*A function that writes the current situation of the ready queue(priority queue) to the output file
- * outFile: output file
- * curTime: current time
- * priority queue: ready queue
- */
-void OutputWriter(string outFile, int curTime, priority_queue<Process, vector<Process>, ComparePriorities> pqProcesses){
+int main(int argc, char *argv[]){
 
-    ofstream out(outFile,ios::out | ios::app);
-    out << curTime << ":HEAD-";
-    if(pqProcesses.empty())
-        out<< "-";
-    while(!pqProcesses.empty()){        //prints all the processes' current situation in the ready queue
-        Process p1 = pqProcesses.top();
-        pqProcesses.pop();
-        int instrCount=p1.instrPtr+1;   //counter, denotes next instruction of the related process
-        out<< p1.procName<<"["<< instrCount<<"]-";
-    }
-    out <<  "TAIL\n";
-    out.close();
+	//opening the output file
+	_file = fopen("output.txt", "w");
+	if (_file == NULL){
+    		printf("Error opening file!\n");
+    		exit(1);
+	}
+
+	int i;
+	int num_of_seats =atoi(argv[1]);	//first command line argument is loaded as total number of seats
+	total_seats=num_of_seats;
+	
+	
+	isAvailable = (int*) malloc(sizeof(int)*num_of_seats);	//allocating memory for our array
+	for (i = 0; i < num_of_seats; i++){
+		isAvailable[i] = 1;		//initializing isAvailable, all ones
+	}
+	
+	fprintf(_file, "Number of total seats: %d\n", num_of_seats);
+	
+	srand(time(NULL));			//seeding the random number generator
+	
+	pthread_t tid[num_of_seats]; 	/* the thread identifier */
+	pthread_attr_t attr; 		/* set of attributes for the thread */
+	pthread_attr_init(&attr);	/* get the default attributes */
+	
+	/* creating the threads (Clients), in total number of seats times */
+	for (i = 0; i < num_of_seats; i++){ 
+	
+		struct pars *str = (struct pars *)malloc(sizeof(struct pars));	//allocating memoray, for struct of each client thread seperately, setting seat_num and cli_id
+		str->seat_num=0;		
+		str->cli_id=i;		
+	
+		pthread_create(&tid[i],&attr,Client,(void *)str);		//creating the Client thread, passing it the pointer of the struct
+	}
+	
+	/* Now join on each thread */
+	for (i = 0; i < num_of_seats; i++) 		//thread waits for thread to terminate
+		pthread_join(tid[i], NULL);
+		
+	fprintf(_file, "All seats are reserved.");	//if all seats are reserved, prints out
+		
 }
 
-/* I've executed the necessary scheduling operations in the main function
- *
+/**
+ * The Client thread begins control in this function, we passed it a struct when creating it
  */
-int main(int args, char* argv[]) {
+void *Client(void *param) 
+{
+	
+	sleep(((rand() %151)+50)/1000);		//thread sleeps for [150-200] milliseconds
+		
+	pthread_t s;			/* the thread identifier */
+	pthread_attr_t attr;		/* set of attributes for the thread */
+	pthread_attr_init(&attr);	/* get the default attributes */
+	
+	pthread_create(&s, &attr, Server, (void *)param);	//creating the Server thread, passing it the pointer of the struct
 
-    if(args==1){ //sets definition file and output file in case of args given
-
-        argv[1]= (char*)"./definition.txt";
-        argv[2]= (char*)"./output.txt";
-
-    }
-
-    ifstream defnInput(argv[1], ios::in);   // defines input file as argv[1]
-    string _procName;   //process name
-    string _codeFile;   //name of the code file
-    int _arrivalTime;   //arrival time of the process
-    int _priority;      //priority of the process
-
-    vector<Process> procVec;    //a vector which holds all of the processes
-    int counter = 0;            //counter that determines the process ID(arrival line# of the process)
-    while (defnInput.good()){   //reads until the end of the input file
-        defnInput >> _procName >> _priority >> _codeFile >> _arrivalTime;  //each token assigned to related instances
-
-        if(!(procVec.size()>0&&_procName==procVec.back().procName)) { //handles the end of line exception
-            Process temp=Process(_priority, _arrivalTime, _procName, _codeFile, counter);   //creates process object
-            procVec.push_back(temp);    //pushes the created process to the processes vector
-            counter++;
-        }
-    }
-    defnInput.close();
-
-    vector <int> burstTimes(procVec.size(),0);  //initializing a vector for burst times of processes
-
-
-    /*
-     * calculates burst times of processes, by adding each instructions'
-     * execution times, which are defined in the instruction vectors of the processes,
-     * in the process object beforehand
-     */
-
-    for (int j = 0; j <procVec.size() ; j++) {
-        for (int i = 0; i <procVec[j].instrVec.size() ; ++i) {
-            burstTimes[j]+=(procVec[j].instrVec[i]);
-        }
-    }
-
-    int procVecSize=procVec.size(); //integer holding the size of the processes vector
-
-    /*
-     *
-     *  Scheduling process takes place from now on
-     *
-     */
-    int currTime=0;     //current time which will be set to a new value after each operation, if necessary
-    int procPtr=0;      //a pointer to keep at which process we are at
-
-    /* priority queue which orders the processes in it according to the ComparePriorities function
-     * which is the "ready queue",
-     */
-    priority_queue<Process, vector<Process>, ComparePriorities> pqProcesses;
-
-    OutputWriter(argv[2],currTime,pqProcesses); //prints the initial situation of the ready queue
-
-    currTime=procVec[procPtr].arTime;   //sets the current time to the arrival time of the first process
-
-    //checks the arrival of the new processes <= current time, pushes to the PQ if there are
-    while(procPtr != procVecSize&&procVec[procPtr].arTime<=currTime){
-        pqProcesses.push(procVec[procPtr]);
-        procPtr  ++;
-    }
-    OutputWriter(argv[2],currTime,pqProcesses); //prints the current situation of the ready queue after adding new processes
-
-    while(!pqProcesses.empty()) { //operates until the ready queue is emptied
-
-        //the pointed instruction of the process at the top of the priority queue is executed,
-        // currTime is set accordingly
-          Process p2 = pqProcesses.top();
-          pqProcesses.pop();
-          currTime += p2.instrVec[p2.instrPtr];
-
-          p2.instrPtr++;    //pointer points the next instruction of the process
-
-          if ((p2.instrPtr) != p2.instrVec.size()) {
-              pqProcesses.push(p2);
-
-              bool newCheck=0;
-
-              while (procPtr!= procVecSize&&procVec[procPtr].arTime <= currTime) {
-                  pqProcesses.push(procVec[procPtr]);
-                  procPtr++;
-                  newCheck=1;
-              }
-
-              if(newCheck)
-                  OutputWriter(argv[2],currTime,pqProcesses);
-          } else {
-
-              procVec[p2.processID].compTime=currTime;
-              //instructions of the process is over, need to print current statement
-              while (procPtr != procVecSize&&procVec[procPtr].arTime <= currTime) {
-                  pqProcesses.push(procVec[procPtr]);
-                  procPtr++;
-              }
-              OutputWriter(argv[2],currTime,pqProcesses);
-                //print ready queue(priority queue)
-          }
-
-          if ((procPtr != procVecSize)&&pqProcesses.empty()) {
-              currTime = procVec[procPtr].arTime;
-
-              while ((procPtr != procVecSize)&&(procVec[procPtr].arTime <= currTime)) {
-                  pqProcesses.push(procVec[procPtr]);
-                  procPtr++;
-              }
-              OutputWriter(argv[2],currTime,pqProcesses);
-
-          }
-    }
-
-
-
-
-
-
-    ofstream out(argv[2],ios::out | ios::app);
-
-    out<<"\n";
-    for(int i=0; i<procVec.size(); i++){
-
-        procVec[i].turnAround=procVec[i].compTime-procVec[i].arTime;
-        procVec[i].waitingTime=procVec[i].turnAround-burstTimes[i];
-
-        out<<"Turnaround time for "<< procVec[i].procName <<" = "<< procVec[i].turnAround<<" ms\n";
-        out<<"Waiting time for "<< procVec[i].procName <<" = "<< procVec[i].waitingTime<<"\n";
-
-    }
-
-    out.close();
-
-
-
-    return 0;
+	struct pars *data1 =  (struct pars*)param;		//in order to be able to use the values in the struct, we made necessary arrangements
+	
+	do{
+		int rand_seat= rand() % total_seats;		//picks a random number between [0-(#totalseats-1)]
+		pthread_mutex_lock(&m);				//activates mutex lock, since we will touch to the shared data from now on
+		
+		if(isAvailable[rand_seat]==1){			//checks whether the selected random seat is reserved before
+					
+			data1->cli_id;				//sets the cli_id and seat number of the current struct as current values
+			data1->seat_num=rand_seat+1;
+			isAvailable[rand_seat]=0;		//sets available to false, since we reserved that seat
+			pthread_mutex_unlock(&m);		//unlocks the mutex since we wont in contact with any shared data for this thread
+		
+			break;
+		}else{						//if the random seat is reserved, unlocks the mutex and repeats picking a random seat
+			pthread_mutex_unlock(&m);
+		
+		}			
+	}while(1);
+	
+	pthread_join(s, NULL);
+	pthread_exit(0);
 }
+
+void *Server(void *param) 		//the Server thread 
+{
+	
+	struct pars *data =  (struct pars*)param;
+	
+	while(data->seat_num==0);	//checks whether client found an available seat, if not stays in busy waiting
+
+	fprintf(_file, "Client%d reserves Seat%d\n", data->cli_id+1, data->seat_num);	//if client founded an available seat, printouts it as reserved
+					//we can reach the necessary data values via the struct pointer, that we passed in when creating the Server thread
+	
+	pthread_exit(0);
+}
+
