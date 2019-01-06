@@ -1,5 +1,5 @@
 # FlightSimulator_Threads
-A Flight Simulator Program, written in a parallel programming manner
+A Flight Simulator Program, written in a parallel programming manner, language: C
 
 In this project we were asked to implement a program in which we exercise thread concept and
 handling critical sections mainly. The musts of the project were implementing the code in
